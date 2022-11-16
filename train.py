@@ -26,6 +26,22 @@ from conf import settings
 from utils import get_network, get_training_dataloader, get_test_dataloader, WarmUpLR, \
     most_recent_folder, most_recent_weights, last_epoch, best_acc_weights
 
+def adjust_brightness(images: torch.Tensor, mode='random', brightness=[0.2, 2]):
+    if mode=='random':
+        num_sample_per_batch = images.shape[0]
+        brightness_factor = torch.empty(num_sample_per_batch).uniform_(brightness[0], brightness[1])
+        if args.gpu:
+            brightness_factor = brightness_factor.cuda()
+
+    elif mode=='learnable':
+        brightness_factor = augmentation_module(images)
+        if brightness is not None:
+            brightness_factor = brightness_factor.clamp(brightness[0], brightness[1])
+    
+    image_upper_bound = 1.0
+    adjusted_images = brightness_factor[:,None, None, None] * images.clamp(0, image_upper_bound).to(images.dtype)
+    return adjusted_images, brightness_factor
+
 def train(epoch):
 
     start = time.time()
@@ -37,9 +53,15 @@ def train(epoch):
             images = images.cuda()
 
         optimizer.zero_grad()
+        if args.learning_augmentation:
+            images, brightness_factor = adjust_brightness(images, mode='learnable')
+        else:
+            images, brightness_factor = adjust_brightness(images, mode='random')
+ 
         outputs = net(images)
         loss = loss_function(outputs, labels)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
         optimizer.step()
 
         n_iter = (epoch - 1) * len(cifar100_training_loader) + batch_index + 1
@@ -50,10 +72,18 @@ def train(epoch):
                 writer.add_scalar('LastLayerGradients/grad_norm2_weights', para.grad.norm(), n_iter)
             if 'bias' in name:
                 writer.add_scalar('LastLayerGradients/grad_norm2_bias', para.grad.norm(), n_iter)
+        
+        mean_brightness_factor = float(torch.mean(brightness_factor))
+        writer.add_scalar('brightness_factor/mean', mean_brightness_factor, n_iter)
+        min_brightness_factor = float(torch.min(brightness_factor))
+        writer.add_scalar('brightness_factor/min', min_brightness_factor, n_iter)
+        max_brightness_factor = float(torch.max(brightness_factor))
+        writer.add_scalar('brightness_factor/max', max_brightness_factor, n_iter)
 
-        print('Training Epoch: {epoch} [{trained_samples}/{total_samples}]\tLoss: {:0.4f}\tLR: {:0.6f}'.format(
+        print('Training Epoch: {epoch} [{trained_samples}/{total_samples}]\tLoss: {:0.4f}\tLR: {:0.6f} mean_brightness_factor: {:0.4f}'.format(
             loss.item(),
             optimizer.param_groups[0]['lr'],
+            mean_brightness_factor,
             epoch=epoch,
             trained_samples=batch_index * args.b + len(images),
             total_samples=len(cifar100_training_loader.dataset)
@@ -116,6 +146,23 @@ def eval_training(epoch=0, tb=True):
 
     return correct.float() / len(cifar100_test_loader.dataset)
 
+
+class AugmentationModule(nn.Module):
+    def __init__(self):
+        super(AugmentationModule, self).__init__()
+        self.learn_brightness_factor = nn.Sequential(
+            torch.nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, stride=2),
+            torch.nn.ReLU6(inplace=True),
+            torch.nn.Conv2d(in_channels=3, out_channels=1, kernel_size=3, stride=2),
+            torch.nn.ReLU6(inplace=True),
+            torch.nn.AdaptiveAvgPool2d(1),
+        )
+    
+    def forward(self, x):
+        brightness_factor = self.learn_brightness_factor(x)
+        brightness_factor.squeeze_(-1).squeeze_(-1).squeeze_(-1)
+        return brightness_factor
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
@@ -125,9 +172,16 @@ if __name__ == '__main__':
     parser.add_argument('-warm', type=int, default=1, help='warm up training phase')
     parser.add_argument('-lr', type=float, default=0.1, help='initial learning rate')
     parser.add_argument('-resume', action='store_true', default=False, help='resume training')
+    parser.add_argument('-learning_augmentation', action='store_true', default=False, help='learning augmentation')
     args = parser.parse_args()
 
     net = get_network(args)
+
+    if args.learning_augmentation:
+        augmentation_module = AugmentationModule()
+        if args.gpu: #use_gpu
+            augmentation_module = augmentation_module.cuda()
+
 
     #data preprocessing:
     cifar100_training_loader = get_training_dataloader(
@@ -147,7 +201,10 @@ if __name__ == '__main__':
     )
 
     loss_function = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    if args.learning_augmentation:
+        optimizer = optim.SGD(list(net.parameters())+list(augmentation_module.parameters()), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    else:
+        optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     train_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=settings.MILESTONES, gamma=0.2) #learning rate decay
     iter_per_epoch = len(cifar100_training_loader)
     warmup_scheduler = WarmUpLR(optimizer, iter_per_epoch * args.warm)
