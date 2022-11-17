@@ -40,6 +40,7 @@ def train(epoch):
         outputs = net(images)
         loss = loss_function(outputs, labels)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
         optimizer.step()
 
         n_iter = (epoch - 1) * len(cifar100_training_loader) + batch_index + 1

@@ -162,6 +162,15 @@ def get_network(args):
 
     return net
 
+class RandomAB(torch.nn.Module):
+    def __init__(self, a_lower=0.3, a_upper=1.7):
+        super().__init__()
+        self.a_lower = a_lower
+        self.a_upper = a_upper
+
+    def forward(self, tensor):
+        a = numpy.random.uniform(self.a_lower, self.a_upper)
+        return tensor * a
 
 def get_training_dataloader(mean, std, batch_size=16, num_workers=2, shuffle=True):
     """ return training dataloader
@@ -177,10 +186,11 @@ def get_training_dataloader(mean, std, batch_size=16, num_workers=2, shuffle=Tru
 
     transform_train = transforms.Compose([
         #transforms.ToPILImage(),
-        transforms.RandomCrop(32, padding=4),
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(15),
+        # transforms.RandomCrop(32, padding=4),
+        # transforms.RandomHorizontalFlip(),
+        # transforms.RandomRotation(15),
         transforms.ToTensor(),
+        RandomAB(),
         transforms.Normalize(mean, std)
     ])
     #cifar100_training = CIFAR100Train(path, transform=transform_train)
