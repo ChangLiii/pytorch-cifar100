@@ -55,6 +55,9 @@ def forward(model, data, label, inner_lr=0.04):
     for k, v in model.named_parameters():
         if v.requires_grad:
             trainable_params[k] = v
+    for k, v in augmentation_module.named_parameters():
+        if v.requires_grad:
+            trainable_params[k] = v
 
     n = trainable_params.keys()
     w = trainable_params.values()
@@ -67,49 +70,13 @@ def forward(model, data, label, inner_lr=0.04):
     new_trainable_params = {}
     for i, a_name in enumerate(n):
         new_trainable_params[a_name] = trainable_params[a_name] - gw[i] * inner_lr
-        
+
     # final L
     model.eval()    
     model.load_state_dict(new_trainable_params, strict=False) # expect to see missing keys (for bn stats); and unexpected keys (for augmentation module)
-    for k, v in model.named_parameters():
-        if v.requires_grad:
-            setattr()
-
     output_1 = model(data_1)
-    new_model_trainable_params = {}
-    for k, v in model.named_parameters():
-        if v.requires_grad:
-            new_model_trainable_params[k] = v
+    # del new_model
     final_loss = loss_function(output_1, label_1)
-    dw = torch.autograd.grad(final_loss, new_model_trainable_params.values())
-    # model.train()
-
-    trainable_module_params = {}
-    for k, v in augmentation_module.named_parameters():
-        if v.requires_grad:
-            trainable_module_params[k] = v
-    hvp_in = [new_model_trainable_params.values(), trainable_module_params.values()]
-    # dgw = dw.neg()  # gw is already weighted by lr, so simple negation
-    
-    hvp_grad = torch.autograd.grad(
-        outputs=gw,
-        inputs=trainable_module_params.values(),
-        grad_outputs=dw
-    )
-    import sys; sys.exit()
-    # # Update for next iteration, i.e., previous step
-    # with torch.no_grad():
-    #     # Save the computed gdata and glrs
-    #     datas.append(data)
-    #     gdatas.append(hvp_grad[1])
-    #     lrs.append(lr)
-    #     glrs.append(hvp_grad[2])
-
-    #     # Update for next iteration, i.e., previous step
-    #     # Update dw
-    #     # dw becomes the gradients w.r.t. the updated w for previous step
-    #     dw.add_(hvp_grad[0])
-
     return final_loss, brightness_factor
 
 class AugmentationModule(nn.Module):
@@ -117,9 +84,9 @@ class AugmentationModule(nn.Module):
         super(AugmentationModule, self).__init__()
         self.learn_brightness_factor = nn.Sequential(
             torch.nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, stride=2),
-            torch.nn.Sigmoid(),
+            torch.nn.ReLU6(inplace=True),
             torch.nn.Conv2d(in_channels=3, out_channels=1, kernel_size=3, stride=2),
-            torch.nn.Sigmoid(),
+            torch.nn.ReLU6(inplace=True),
             torch.nn.AdaptiveAvgPool2d(1),
         )
 
@@ -127,7 +94,6 @@ class AugmentationModule(nn.Module):
         brightness_factor = self.learn_brightness_factor(x)
         brightness_factor.squeeze_(-1).squeeze_(-1).squeeze_(-1)
         return brightness_factor
-
 
 
 def adjust_brightness(images: torch.Tensor, augmentation_module, mode='random', brightness=[0.2, 2]):
@@ -207,9 +173,6 @@ def train(epoch):
         loss, brightness_factor = forward(net, images, labels, inner_lr)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
-        for n,m in augmentation_module.named_parameters():
-            if n == 'learn_brightness_factor.2.weight':
-                print(n, m, m.grad)
         optimizer.step()
 
         n_iter = (epoch - 1) * len(cifar100_training_loader) + batch_index + 1
