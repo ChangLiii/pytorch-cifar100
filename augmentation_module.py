@@ -31,7 +31,7 @@ class AmortizedParamDist_Color(nn.Module):
         super(AmortizedParamDist_Color, self).__init__()
 
         layers = color_layer
-        dims = color_dim[0]
+        dims = color_dim
 
         # Augmentation module network
         # TODO: make the PreActNetwork a seperate file
@@ -51,21 +51,29 @@ class Color_Uniform_Dist_ConvFeature(ParametricDistribution):
 
     def __init__(self, param, **kwargs):
         super(Color_Uniform_Dist_ConvFeature, self).__init__()
-               
-        # param for color aug is (100, 2, 1, 1)
-        # TODO: do we need to minus 4?
-        perturbation_range=torch.sigmoid(param-4) 
-        print(f"perturbation range is {perturbation_range.shape}")
+        # param for color aug is (N, 2, 1, 1)
+        # original: do we need to minus 4?
+        # perturbation_range=torch.sigmoid(param-4) 
+        
+        perturbation_range=torch.sigmoid(param) # ([N, 2, 1, 1])
         
         max_range=[0.0, 20.0] # TODO: the range could be changed
         ranges=torch.tensor(max_range).type(perturbation_range.type()).reshape([1,-1,1,1])   
              
         perturbation_range=perturbation_range*ranges
+        print(f"perturbation range is {perturbation_range}") 
+
         
         r_shape=list(perturbation_range.shape)
         r_shape[1]=int(r_shape[1]/2)
-        r=torch.rand(r_shape).type(perturbation_range.type())
-        perturbation=r*perturbation_range[:,::2]-(1-r)*perturbation_range[:,1::2]
+        r=torch.rand(r_shape).type(perturbation_range.type()) # uniform sampling 
+        #perturbation=r*perturbation_range[:,::2]-(1-r)*perturbation_range[:,1::2]
+        # (lower_bound - upper_bound) * torch.rand + r2 is uniformly distributed on [lower_bound, upper_bound]
+        print(f"lower_bound is {perturbation_range[:,::2]}")
+        print(f"upper_bound is {perturbation_range[:,1::2]}")
+        
+        perturbation= (perturbation_range[:,::2] - perturbation_range[:,1::2])*r + perturbation_range[:,1::2]
+        print(f"perturbation is {perturbation}")
         
         self.perturbation=perturbation
         self.entropy_every=perturbation_range.mean(dim=[2, 3])
@@ -76,7 +84,6 @@ class Color_Uniform_Dist_ConvFeature(ParametricDistribution):
         return {"entropy": self.entropy_every.detach().cpu()}
     
     def rsample(self):
-        print(f"self.perturbation is {self.perturbation}")
         return self.perturbation    #!only support one sample now
     
  
@@ -86,7 +93,7 @@ class Augmentation_Module(nn.Module):
     def __init__(self, device='cuda'):
         super(Augmentation_Module, self).__init__()
         # only transform brightness factor
-        self.transform = ['brightness',]   
+        self.transform = ['brightness',]
 
         # Definition of PreactResNet
         color_layer=[-1]
@@ -104,14 +111,19 @@ class Augmentation_Module(nn.Module):
     def forward(self, x):
         x_input=x
 
-        param_color=self.get_param(x_input)
+        param_color=self.get_param(x_input)[0]
         
         self.dist_color=self.distC_color(param_color,)
         perturbation=self.dist_color.rsample() # return a sample for brightness factor
-        print(f"perturbation is {perturbation}")
-        x = T.functional.adjust_brightness(x, brightness_factor = perturbation)
-                                    
-        return x
+        
+        for val in perturbation.detach().cpu().numpy():
+            if val < 0:
+                print(f"{val} is less than 0")
+            assert val > 0, f'{val} is less than 0'
+
+        x = x * perturbation
+
+        return x, perturbation
         
         
 if __name__=='__main__':

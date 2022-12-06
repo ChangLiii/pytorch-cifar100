@@ -27,6 +27,7 @@ from torch.utils.tensorboard import SummaryWriter
 from conf import settings
 from utils import get_network, get_training_dataloader, get_test_dataloader, WarmUpLR, \
     most_recent_folder, most_recent_weights, last_epoch, best_acc_weights
+from augmentation_module import Augmentation_Module
 
 import time
 
@@ -79,6 +80,7 @@ def forward(model, data, label, inner_lr=0.04):
     final_loss = loss_function(output_1, label_1)
     return final_loss, brightness_factor
 
+# Augmentation v1
 class AugmentationModule(nn.Module):
     def __init__(self):
         super(AugmentationModule, self).__init__()
@@ -102,14 +104,14 @@ def adjust_brightness(images: torch.Tensor, augmentation_module, mode='random', 
         brightness_factor = torch.empty(num_sample_per_batch).uniform_(brightness[0], brightness[1])
         if args.gpu:
             brightness_factor = brightness_factor.cuda()
-
+    # augmentation_module v1
+    # elif mode=='learnable':
+    #     brightness_factor = augmentation_module(images)
+    #     if brightness is not None:
+    #         brightness_factor = brightness_factor.clamp(brightness[0], brightness[1])
     elif mode=='learnable':
-        brightness_factor = augmentation_module(images)
-        if brightness is not None:
-            brightness_factor = brightness_factor.clamp(brightness[0], brightness[1])
+        adjusted_images, brightness_factor = augmentation_module(images)
 
-    image_upper_bound = 1.0
-    adjusted_images = brightness_factor[:,None, None, None] * images.clamp(0, image_upper_bound).to(images.dtype)
     return adjusted_images, brightness_factor
 
 
@@ -274,7 +276,7 @@ if __name__ == '__main__':
     net = get_network(args)
 
     if args.learning_augmentation:
-        augmentation_module = AugmentationModule()
+        augmentation_module = Augmentation_Module()
         if args.gpu: #use_gpu
             augmentation_module = augmentation_module.cuda()
     

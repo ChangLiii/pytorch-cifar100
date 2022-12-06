@@ -11,29 +11,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import numpy as np
-
-def weights_init_hetruncatednormal(m, dense_gaussian=False):
-    """
-    Simple init function
-    """
-    classname = m.__class__.__name__
-    if classname.find('Conv') != -1:
-        kaiming_normal_truncated(m.weight.data, a=0, mode='fan_in', nonlinearity='relu')
-        if m.bias is not None:
-            nn.init.constant(m.bias, 0)
-    elif classname.find('Linear') != -1:
-        if dense_gaussian:
-            nn.init.normal_(m.weight.data, mean=0, std=0.01)
-        else:
-            kaiming_normal_truncated(
-                m.weight.data, a=0, mode='fan_in', nonlinearity='relu'
-            )
-        if m.bias is not None:
-            nn.init.constant_(m.bias, 0)
-    elif isinstance(m, nn.BatchNorm2d):
-        if m.weight is not None:
-            m.weight.data.fill_(1)
-            m.bias.data.zero_()
+from torchutils import kaiming_normal_truncated, weights_init_hetruncatednormal
 
 class LOGGER:
     @staticmethod
@@ -144,7 +122,7 @@ class PreActResFeatureNet(nn.Module):
         
     def _init_first_layer(self):
         assert self.config_args["num_members"] == 1
-        self.conv1 = self._make_conv1(nb_input_channel=6)#! The channel is changed to 6
+        self.conv1 = self._make_conv1(nb_input_channel=3) 
 
     def _init_core_network(self):
         """
@@ -177,8 +155,8 @@ class PreActResFeatureNet(nn.Module):
                 
             if layer==-1:
                 feature_pre=nn.Conv2d(
-                self._nChannels[layer], self.output_dims[i], kernel_size=8, stride=1, padding=0, bias=False)
-                feature=nn.Sequential(feature_pre, AddBias([self.output_dims[i], 1, 1]))
+                self._nChannels[layer], self.output_dims[i], kernel_size=4, stride=1, padding=0, bias=False)
+                feature=nn.Sequential(feature_pre, AddBias([self.output_dims[i], 1, 1]),) # torch.nn.Sigmoid()
             
             exec('self.conv_feature'+str(i)+' =feature')
             
@@ -238,7 +216,7 @@ class PreActResFeatureNet(nn.Module):
 
 
     def forward(self, x): 
-
+        # cifar 10 input size is [N, 3, 32, 32]
         merged_representation = self._forward_first_layer(x)
         
         map_list=self._forward_core_network(merged_representation)
