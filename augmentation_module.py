@@ -61,23 +61,17 @@ class Color_Uniform_Dist_ConvFeature(ParametricDistribution):
         ranges=torch.tensor(max_range).type(perturbation_range.type()).reshape([1,-1,1,1])   
              
         perturbation_range=perturbation_range*ranges
-        print(f"perturbation range is {perturbation_range}") 
-
         
         r_shape=list(perturbation_range.shape)
         r_shape[1]=int(r_shape[1]/2)
-        r=torch.rand(r_shape).type(perturbation_range.type()) # uniform sampling 
+        r=torch.rand(r_shape).type(perturbation_range.type()) # uniform sampling between 0-1
         #perturbation=r*perturbation_range[:,::2]-(1-r)*perturbation_range[:,1::2]
-        # (lower_bound - upper_bound) * torch.rand + r2 is uniformly distributed on [lower_bound, upper_bound]
-        print(f"lower_bound is {perturbation_range[:,::2]}")
-        print(f"upper_bound is {perturbation_range[:,1::2]}")
         
+        # (lower_bound - upper_bound) * torch.rand + r2 is uniformly distributed on [lower_bound, upper_bound]
         perturbation= (perturbation_range[:,::2] - perturbation_range[:,1::2])*r + perturbation_range[:,1::2]
-        print(f"perturbation is {perturbation}")
         
         self.perturbation=perturbation
         self.entropy_every=perturbation_range.mean(dim=[2, 3])
-        print(f"self.entropy_every is {self.entropy_every}")
         
     @property
     def params(self):
@@ -116,11 +110,9 @@ class Augmentation_Module(nn.Module):
         self.dist_color=self.distC_color(param_color,)
         perturbation=self.dist_color.rsample() # return a sample for brightness factor
         
-        for val in perturbation.detach().cpu().numpy():
-            if val < 0:
-                print(f"{val} is less than 0")
+        # make sure the brightness factor is greater than 0
+        for val in perturbation.flatten().tolist():
             assert val > 0, f'{val} is less than 0'
-
         x = x * perturbation
 
         return x, perturbation

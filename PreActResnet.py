@@ -226,7 +226,6 @@ class PreActResFeatureNet(nn.Module):
             out=self.output_conv_list[i](map_list[self.output_layer[i]])
             out_list.append(out)
         
-        print(f"PreActResFeatureNet out_list returned from forward function shape is {out_list[0].shape}")
         return out_list      
     
     def _forward_first_layer(self, pixels):
