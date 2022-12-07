@@ -20,6 +20,8 @@ import torchvision
 import torchvision.transforms as transforms
 from torch.nn import init
 import copy
+from torch.nn import init
+import copy
 
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -33,6 +35,7 @@ import time
 import numpy as np
 import torch
 import torch.optim as optim
+from augmentation_module import Augmentation_Module
 
 def permute_list(list):
     indices = np.random.permutation(len(list))
@@ -130,10 +133,29 @@ def adjust_brightness(images: torch.Tensor, augmentation_module, mode='random', 
         if brightness is not None:
             brightness_factor = brightness_factor.clamp(brightness[0], brightness[1])
 
-    image_upper_bound = 1.0
-    adjusted_images = brightness_factor[:,None, None, None] * images.clamp(0, image_upper_bound).to(images.dtype)
+
     return adjusted_images, brightness_factor
 
+def adjust_brightness(images: torch.Tensor, augmentation_module, mode='random', brightness=[0.2, 2]):
+    if mode=='random':
+        num_sample_per_batch = images.shape[0]
+        brightness_factor = torch.empty(num_sample_per_batch).uniform_(brightness[0], brightness[1])
+        if args.gpu:
+            brightness_factor = brightness_factor.cuda()
+        image_upper_bound = 1.0
+        adjusted_images = brightness_factor[:,None, None, None] * images.clamp(0, image_upper_bound).to(images.dtype)
+    # augmentation_module v1
+    # elif mode=='learnable':
+    #     brightness_factor = augmentation_module(images)
+    #     if brightness is not None:
+    #         brightness_factor = brightness_factor.clamp(brightness[0], brightness[1])
+        # image_upper_bound = 1.0
+        # adjusted_images = brightness_factor[:,None, None, None] * images.clamp(0, image_upper_bound).to(images.dtype)
+    
+    elif mode=='learnable':
+        adjusted_images, brightness_factor = augmentation_module(images)
+
+    return adjusted_images, brightness_factor
 
 def init_weights(net, state):
     init_type, init_param = state.init, state.init_param
@@ -217,6 +239,9 @@ def train(epoch):
             optimizer.param_groups[0]['lr'],
             optimizer.param_groups[1]['lr'],
             mean_brightness_factor,
+            mean_brightness_factor,
+            max_brightness_factor,
+            min_brightness_factor,
             epoch=epoch,
             trained_samples=batch_index * args.b + len(images),
             total_samples=len(cifar100_training_loader.dataset)
@@ -264,7 +289,7 @@ def eval_training(epoch=0, tb=True):
         print('GPU INFO.....')
         print(torch.cuda.memory_summary(), end='')
     print('Evaluating Network.....')
-    print('Test set: Epoch: {}, Average loss: {:.4f}, Accuracy: {:.4f}, Time consumed:{:.2f}s'.format(
+    print('Test set: Epoch: {}, Average loss: {:.4f}, model: {:.4f}, Time consumed:{:.2f}s'.format(
         epoch,
         test_loss / len(cifar100_test_loader.dataset),
         correct.float() / len(cifar100_test_loader.dataset),
@@ -297,12 +322,11 @@ if __name__ == '__main__':
     net = get_network(args)
 
     if args.learning_augmentation:
-        augmentation_module = AugmentationModule()
+        augmentation_module = Augmentation_Module() # AugmentationModule()
         if args.gpu: #use_gpu
             augmentation_module = augmentation_module.cuda()
-    
-    lr_ratio = args.lr_ratio
 
+    lr_ratio = args.lr_ratio
 
     #data preprocessing:
     cifar100_training_loader = get_training_dataloader(
