@@ -1,7 +1,6 @@
 # train.py
 #!/usr/bin/env	python3
 
-"hellow"
 """ train network using pytorch
 
 author baiyu
