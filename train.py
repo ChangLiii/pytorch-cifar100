@@ -19,7 +19,6 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 from torch.nn import init
-import copy
 
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -27,19 +26,18 @@ from torch.utils.tensorboard import SummaryWriter
 from conf import settings
 from utils import get_network, get_training_dataloader, get_test_dataloader, WarmUpLR, \
     most_recent_folder, most_recent_weights, last_epoch, best_acc_weights
-from augmentation_module import Augmentation_Module
-
 import time
 
 import numpy as np
 import torch
 import torch.optim as optim
+from augmentation_module import Augmentation_Module
 
 def permute_list(list):
     indices = np.random.permutation(len(list))
     return [list[i] for i in indices]
 
-def forward(model, data, label, inner_lr=0.04):
+def forward_and_backward(model, data, label, augmentation_version='v2', inner_lr=0.04, outer_lr=0.04):
     assert data.shape[0] == label.shape[0], 'data label must be of the same length'
     data_len = data.shape[0]
     data_0 = data[:data_len//2]
@@ -56,44 +54,62 @@ def forward(model, data, label, inner_lr=0.04):
     for k, v in model.named_parameters():
         if v.requires_grad:
             trainable_params[k] = v
-            trainable_params_include_augmentation_module[k] = v
-           
-    # TODO: no need to augmentation_module parameter here for backprop
-    # # commented out for Aumgnetation Module no update experiment 
-    # for k, v in augmentation_module.named_parameters():
-    #     if v.requires_grad:
-    #         trainable_params_include_augmentation_module[k] = v
 
-    n = trainable_params.keys()
+    model_names = trainable_params.keys()
     w = trainable_params.values()
 
-    adjusted_data_0, brightness_factor = adjust_brightness(data_0, augmentation_module, mode='learnable')
+    adjusted_data_0, brightness_factor = adjust_brightness(data_0, augmentation_module, augmentation_version, mode='learnable')
     output_0 = model(adjusted_data_0)
     loss = loss_function(output_0, label_0)
-    # loss is from using the augmented image result
     gw = torch.autograd.grad(loss, w, create_graph=True)
 
     new_trainable_params = {}
-    for i, a_name in enumerate(n):
+    for i, a_name in enumerate(model_names):
         new_trainable_params[a_name] = trainable_params[a_name] - gw[i] * inner_lr
-
+        
     # final L
-    # model.eval() # commented out for Aumgnetation Module no update experiment    
-    model.load_state_dict(new_trainable_params, strict=False) # expect to see missing keys (for bn stats); and unexpected keys (for augmentation module)
+    model.eval()
+ # commented out for Aumgnetation Module no update experiment    w_modules_names = []
+    for m in model.modules():
+        for n, p in m.named_parameters(recurse=False):
+            if p is not None:
+                w_modules_names.append((m, n))
+    for (m, n), w in zip(w_modules_names, new_trainable_params.values()):
+        setattr(m, n, nn.Parameter(w))
     output_1 = model(data_1)
+    model.train()
+    new_model_trainable_params = {}
+    for k, v in model.named_parameters():
+        if v.requires_grad:
+            new_model_trainable_params[k] = v
     final_loss = loss_function(output_1, label_1)
 
+    dw = torch.autograd.grad(final_loss, new_model_trainable_params.values(), retain_graph=True)
+    trainable_module_params = {}
+    for k, v in augmentation_module.named_parameters():
+        if v.requires_grad:
+            trainable_module_params[k] = v
+    dgw = (-a_dw for a_dw in dw)
+    augmentation_grad = torch.autograd.grad(
+        outputs=gw,
+        inputs=trainable_module_params.values(),
+        grad_outputs=dgw,
+        retain_graph=True
+    )
+    torch.autograd.backward(trainable_module_params.values(), grad_tensors=augmentation_grad, retain_graph=True)
+    torch.autograd.backward(new_model_trainable_params.values(), grad_tensors=dw)
+    # final_loss.backward()
     return final_loss, brightness_factor
 
-# Augmentation v1
+# Augmentation module that returns a single factor
 class AugmentationModule(nn.Module):
     def __init__(self):
         super(AugmentationModule, self).__init__()
         self.learn_brightness_factor = nn.Sequential(
             torch.nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, stride=2),
-            torch.nn.ReLU6(inplace=True),
+            torch.nn.Sigmoid(),
             torch.nn.Conv2d(in_channels=3, out_channels=1, kernel_size=3, stride=2),
-            torch.nn.ReLU6(inplace=True),
+            torch.nn.Sigmoid(),
             torch.nn.AdaptiveAvgPool2d(1),
         )
 
@@ -103,22 +119,26 @@ class AugmentationModule(nn.Module):
         return brightness_factor
 
 
-def adjust_brightness(images: torch.Tensor, augmentation_module, mode='random', brightness=[0.2, 2]):
+
+def adjust_brightness(images: torch.Tensor, augmentation_module, augmentation_version, mode='random', brightness=[0.2, 2]):
     if mode=='random':
         num_sample_per_batch = images.shape[0]
         brightness_factor = torch.empty(num_sample_per_batch).uniform_(brightness[0], brightness[1])
         if args.gpu:
             brightness_factor = brightness_factor.cuda()
-    # augmentation_module v1
-    # elif mode=='learnable':
-    #     brightness_factor = augmentation_module(images)
-    #     if brightness is not None:
-    #         brightness_factor = brightness_factor.clamp(brightness[0], brightness[1])
+        image_upper_bound = 1.0
+        adjusted_images = brightness_factor[:,None, None, None] * images.clamp(0, image_upper_bound).to(images.dtype)
     elif mode=='learnable':
-        adjusted_images, brightness_factor = augmentation_module(images)
+        if augmentation_version == 'v2':
+            adjusted_images, brightness_factor = augmentation_module(images)
+        else:
+            brightness_factor = augmentation_module(images)
+            if brightness is not None:
+                brightness_factor = brightness_factor.clamp(brightness[0], brightness[1])
+            image_upper_bound = 1.0
+            adjusted_images = brightness_factor[:,None, None, None] * images.clamp(0, image_upper_bound).to(images.dtype)
 
     return adjusted_images, brightness_factor
-
 
 def init_weights(net, state):
     init_type, init_param = state.init, state.init_param
@@ -176,29 +196,28 @@ def train(epoch):
             images = images.cuda()
 
         optimizer.zero_grad()
-        inner_lr = lr_ratio * optimizer.param_groups[0]['lr']
-        
-        # 2-step training loop
-        #loss, brightness_factor = forward(net, images, labels, inner_lr)
-        
-        # E2E training with Augmentation Module + model together
-        augmented_images, brightness_factor = augmentation_module(images)
-        outputs = net(augmented_images)
-        loss = loss_function(outputs, labels)
-        ##### E2E
-        
-        loss.backward()
+        if args.two_step:
+            inner_lr = lr_ratio * optimizer.param_groups[0]['lr']
+            loss, brightness_factor = forward_and_backward(net, images, labels, args.augmentation_version, inner_lr)
+        else:
+            if args.learning_augmentation:
+                images, brightness_factor = adjust_brightness(images, augmentation_module, args.augmentation_version, mode='learnable')
+            else:
+                images, brightness_factor = adjust_brightness(images, augmentation_module, args.augmentation_version, mode='random')
+            outputs = net(images)
+            loss = loss_function(outputs, labels)
+            loss.backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
         optimizer.step() 
 
         n_iter = (epoch - 1) * len(cifar100_training_loader) + batch_index + 1
 
-        last_layer = list(net.children())[-1]
-        for name, para in last_layer.named_parameters():
-            if 'weight' in name:
-                writer.add_scalar('LastLayerGradients/grad_norm2_weights', para.grad.norm(), n_iter)
-            if 'bias' in name:
-                writer.add_scalar('LastLayerGradients/grad_norm2_bias', para.grad.norm(), n_iter)
+        # last_layer = list(net.children())[-1]
+        # for name, para in last_layer.named_parameters():
+        #     if 'weight' in name:
+        #         writer.add_scalar('LastLayerGradients/grad_norm2_weights', para.grad.norm(), n_iter)
+        #     if 'bias' in name:
+        #         writer.add_scalar('LastLayerGradients/grad_norm2_bias', para.grad.norm(), n_iter)
         
         mean_brightness_factor = float(torch.mean(brightness_factor))
         writer.add_scalar('brightness_factor/mean', mean_brightness_factor, n_iter)
@@ -207,9 +226,10 @@ def train(epoch):
         max_brightness_factor = float(torch.max(brightness_factor))
         writer.add_scalar('brightness_factor/max', max_brightness_factor, n_iter)
 
-        print('Training Epoch: {epoch} [{trained_samples}/{total_samples}]\tLoss: {:0.4f}\tLR: {:0.6f} mean_brightness_factor: {:0.4f} max_brightness_factor: {:0.4f} min_brightness_factor: {:0.4f}'.format(
+        print('Training Epoch: {epoch} [{trained_samples}/{total_samples}]\tLoss: {:0.4f}\tLR: {:0.6f}\tAugLR: {:0.6f} mean_brightness_factor: {:0.4f} max_brightness_factor: {:0.4f} min_brightness_factor: {:0.4f}'.format(
             loss.item(),
             optimizer.param_groups[0]['lr'],
+            optimizer.param_groups[1]['lr'],
             mean_brightness_factor,
             max_brightness_factor,
             min_brightness_factor,
@@ -284,20 +304,24 @@ if __name__ == '__main__':
     parser.add_argument('-b', type=int, default=128, help='batch size for dataloader')
     parser.add_argument('-warm', type=int, default=1, help='warm up training phase')
     parser.add_argument('-lr', type=float, default=0.1, help='initial learning rate')
+    parser.add_argument('-augmentation_lr', type=float, default=0.01, help='initial learning rate for augmentation module')
     parser.add_argument('-lr_ratio', type=float, default=0.1, help='ratio of inner lr to outer lr')
     parser.add_argument('-resume', action='store_true', default=False, help='resume training')
     parser.add_argument('-learning_augmentation', action='store_true', default=False, help='learning augmentation')
-
+    parser.add_argument('-augmentation_version', type=str, default='v2', help='which augmentation module to use')
+    parser.add_argument('-two_step', action='store_true', default=False, help='two step training training')
     args = parser.parse_args()
 
     net = get_network(args)
 
     if args.learning_augmentation:
         # output a distribution
-        augmentation_module = Augmentation_Module()
-        
-        # output a single factor
-        # augmentation_module = AugmentationModule()
+        if args.augmentation_version == 'v2':
+            augmentation_module = Augmentation_Module() # AugmentationModule()
+        else:
+            # output a single factor
+            augmentation_module = AugmentationModule()
+
        
         if args.gpu: #use_gpu
             augmentation_module = augmentation_module.cuda()
@@ -322,11 +346,10 @@ if __name__ == '__main__':
     )
 
     loss_function = nn.CrossEntropyLoss()
+ 
+    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     if args.learning_augmentation:
-        optimizer = optim.SGD(list(net.parameters())+list(augmentation_module.parameters()), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-    else:
-        optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-
+        optimizer.add_param_group({'params': augmentation_module.parameters(), 'lr': args.augmentation_lr, 'momentum': 0.9, 'weight_decay': 5e-4})
     train_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=settings.MILESTONES, gamma=0.2) #learning rate decay
     iter_per_epoch = len(cifar100_training_loader)
     warmup_scheduler = WarmUpLR(optimizer, iter_per_epoch * args.warm)
