@@ -195,10 +195,12 @@ def train(epoch):
         max_brightness_factor = float(torch.max(brightness_factor))
         writer.add_scalar('brightness_factor/max', max_brightness_factor, n_iter)
 
-        print('Training Epoch: {epoch} [{trained_samples}/{total_samples}]\tLoss: {:0.4f}\tLR: {:0.6f} mean_brightness_factor: {:0.4f}'.format(
+        print('Training Epoch: {epoch} [{trained_samples}/{total_samples}]\tLoss: {:0.4f}\tLR: {:0.6f} mean_brightness_factor: {:0.4f} max_brightness_factor: {:0.4f} min_brightness_factor: {:0.4f}'.format(
             loss.item(),
             optimizer.param_groups[0]['lr'],
             mean_brightness_factor,
+            max_brightness_factor,
+            min_brightness_factor,
             epoch=epoch,
             trained_samples=batch_index * args.b + len(images),
             total_samples=len(cifar100_training_loader.dataset)
@@ -246,7 +248,7 @@ def eval_training(epoch=0, tb=True):
         print('GPU INFO.....')
         print(torch.cuda.memory_summary(), end='')
     print('Evaluating Network.....')
-    print('Test set: Epoch: {}, Average loss: {:.4f}, Accuracy: {:.4f}, Time consumed:{:.2f}s'.format(
+    print('Test set: Epoch: {}, Average loss: {:.4f}, model: {:.4f}, Time consumed:{:.2f}s'.format(
         epoch,
         test_loss / len(cifar100_test_loader.dataset),
         correct.float() / len(cifar100_test_loader.dataset),
