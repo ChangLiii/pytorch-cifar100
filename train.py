@@ -53,14 +53,17 @@ def forward(model, data, label, inner_lr=0.04):
     augmentation_module.train()
 
     trainable_params = {}
+    trainable_params_include_augmentation_module = {}
     for k, v in model.named_parameters():
         if v.requires_grad:
             trainable_params[k] = v
+            trainable_params_include_augmentation_module[k] = v
+           
 
     # TODO: no need to augmentation_module parameter here for backprop
-    # for k, v in augmentation_module.named_parameters():
-    #     if v.requires_grad:
-    #         trainable_params[k] = v
+    for k, v in augmentation_module.named_parameters():
+        if v.requires_grad:
+            trainable_params_include_augmentation_module[k] = v
 
     n = trainable_params.keys()
     w = trainable_params.values()
@@ -80,7 +83,9 @@ def forward(model, data, label, inner_lr=0.04):
     model.load_state_dict(new_trainable_params, strict=False) # expect to see missing keys (for bn stats); and unexpected keys (for augmentation module)
     output_1 = model(data_1)
     final_loss = loss_function(output_1, label_1)
-    return final_loss, brightness_factor
+    final_gradient = torch.autograd.grad(final_loss, trainable_params_include_augmentation_module.values(), create_graph=True)
+
+    return final_loss, brightness_factor, final_gradient
 
 # Augmentation v1
 class AugmentationModule(nn.Module):
@@ -174,10 +179,31 @@ def train(epoch):
 
         optimizer.zero_grad()
         inner_lr = lr_ratio * optimizer.param_groups[0]['lr']
-        loss, brightness_factor = forward(net, images, labels, inner_lr)
+        loss, brightness_factor, final_gradient = forward(net, images, labels, inner_lr)
+
+        # update both net and augmentation module based on loss
+        # trainable_params = {}
+        # # for k, v in net.named_parameters():
+        # #     if v.requires_grad:
+        # #         trainable_params[k] = v
+
+        # for k, v in augmentation_module.named_parameters():
+        #     if v.requires_grad:
+        #         trainable_params[k] = v
+
+        # n = trainable_params.keys()
+        # w = trainable_params.values()
+        # print(f"length of w is {len(w)}")
+
+        # TODO: do we need create_graph here
+        # final_gradient = torch.autograd.grad(loss, w, create_graph=True)
+        
         loss.backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
-        optimizer.step()
+        optimizer.step() 
+        # TODO: verify if the augmentation module is changed here
+        # for name, param in augmentation_module.named_parameters():
+        #     print(f"name {name} with data {param.data}")
 
         n_iter = (epoch - 1) * len(cifar100_training_loader) + batch_index + 1
 
@@ -248,7 +274,7 @@ def eval_training(epoch=0, tb=True):
         print('GPU INFO.....')
         print(torch.cuda.memory_summary(), end='')
     print('Evaluating Network.....')
-    print('Test set: Epoch: {}, Average loss: {:.4f}, model: {:.4f}, Time consumed:{:.2f}s'.format(
+    print('Test set: Epoch: {}, Average loss: {:.4f}, Accuracy: {:.4f}, Time consumed:{:.2f}s'.format(
         epoch,
         test_loss / len(cifar100_test_loader.dataset),
         correct.float() / len(cifar100_test_loader.dataset),
@@ -308,6 +334,7 @@ if __name__ == '__main__':
         optimizer = optim.SGD(list(net.parameters())+list(augmentation_module.parameters()), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     else:
         optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+
     train_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=settings.MILESTONES, gamma=0.2) #learning rate decay
     iter_per_epoch = len(cifar100_training_loader)
     warmup_scheduler = WarmUpLR(optimizer, iter_per_epoch * args.warm)
