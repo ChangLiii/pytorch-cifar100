@@ -98,6 +98,7 @@ def forward_and_backward(model, data, label, inner_lr=0.04, outer_lr=0.04):
     )
     torch.autograd.backward(trainable_module_params.values(), grad_tensors=augmentation_grad, retain_graph=True)
     torch.autograd.backward(new_model_trainable_params.values(), grad_tensors=dw)
+    # final_loss.backward()
     return final_loss, brightness_factor
 
 class AugmentationModule(nn.Module):
@@ -211,9 +212,10 @@ def train(epoch):
         max_brightness_factor = float(torch.max(brightness_factor))
         writer.add_scalar('brightness_factor/max', max_brightness_factor, n_iter)
 
-        print('Training Epoch: {epoch} [{trained_samples}/{total_samples}]\tLoss: {:0.4f}\tLR: {:0.6f} mean_brightness_factor: {:0.4f}'.format(
+        print('Training Epoch: {epoch} [{trained_samples}/{total_samples}]\tLoss: {:0.4f}\tLR: {:0.6f}\tAugLR: {:0.6f} mean_brightness_factor: {:0.4f}'.format(
             loss.item(),
             optimizer.param_groups[0]['lr'],
+            optimizer.param_groups[1]['lr'],
             mean_brightness_factor,
             epoch=epoch,
             trained_samples=batch_index * args.b + len(images),
@@ -286,6 +288,7 @@ if __name__ == '__main__':
     parser.add_argument('-b', type=int, default=128, help='batch size for dataloader')
     parser.add_argument('-warm', type=int, default=1, help='warm up training phase')
     parser.add_argument('-lr', type=float, default=0.1, help='initial learning rate')
+    parser.add_argument('-augmentation_lr', type=float, default=0.01, help='initial learning rate for augmentation module')
     parser.add_argument('-lr_ratio', type=float, default=0.1, help='ratio of inner lr to outer lr')
     parser.add_argument('-resume', action='store_true', default=False, help='resume training')
     parser.add_argument('-learning_augmentation', action='store_true', default=False, help='learning augmentation')
@@ -299,6 +302,7 @@ if __name__ == '__main__':
             augmentation_module = augmentation_module.cuda()
     
     lr_ratio = args.lr_ratio
+
 
     #data preprocessing:
     cifar100_training_loader = get_training_dataloader(
@@ -318,10 +322,10 @@ if __name__ == '__main__':
     )
 
     loss_function = nn.CrossEntropyLoss()
+ 
+    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     if args.learning_augmentation:
-        optimizer = optim.SGD(list(net.parameters())+list(augmentation_module.parameters()), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-    else:
-        optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+        optimizer.add_param_group({'params': augmentation_module.parameters(), 'lr': args.augmentation_lr, 'momentum': 0.9, 'weight_decay': 5e-4})
     train_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=settings.MILESTONES, gamma=0.2) #learning rate decay
     iter_per_epoch = len(cifar100_training_loader)
     warmup_scheduler = WarmUpLR(optimizer, iter_per_epoch * args.warm)
