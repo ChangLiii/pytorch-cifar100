@@ -39,7 +39,7 @@ def permute_list(list):
     return [list[i] for i in indices]
 
 
-def forward_and_backward(model, data, label, inner_lr=0.04, outer_lr=0.04):
+def forward_and_backward(model, data, label, augmentation_version='v2', inner_lr=0.04, outer_lr=0.04):
     assert data.shape[0] == label.shape[0], 'data label must be of the same length'
     data_len = data.shape[0]
     data_0 = data[:data_len//2]
@@ -59,7 +59,7 @@ def forward_and_backward(model, data, label, inner_lr=0.04, outer_lr=0.04):
     model_names = trainable_params.keys()
     w = trainable_params.values()
 
-    adjusted_data_0, brightness_factor = adjust_brightness(data_0, augmentation_module, mode='learnable')
+    adjusted_data_0, brightness_factor = adjust_brightness(data_0, augmentation_module, augmentation_version, mode='learnable')
     output_0 = model(adjusted_data_0)
     loss = loss_function(output_0, label_0)
     gw = torch.autograd.grad(loss, w, create_graph=True)
@@ -119,7 +119,7 @@ class AugmentationModule(nn.Module):
 
 
 
-def adjust_brightness(images: torch.Tensor, augmentation_module, mode='random', brightness=[0.2, 2]):
+def adjust_brightness(images: torch.Tensor, augmentation_module, augmentation_version, mode='random', brightness=[0.2, 2]):
     if mode=='random':
         num_sample_per_batch = images.shape[0]
         brightness_factor = torch.empty(num_sample_per_batch).uniform_(brightness[0], brightness[1])
@@ -127,16 +127,15 @@ def adjust_brightness(images: torch.Tensor, augmentation_module, mode='random', 
             brightness_factor = brightness_factor.cuda()
         image_upper_bound = 1.0
         adjusted_images = brightness_factor[:,None, None, None] * images.clamp(0, image_upper_bound).to(images.dtype)
-    # augmentation_module v1
-    # elif mode=='learnable':
-    #     brightness_factor = augmentation_module(images)
-    #     if brightness is not None:
-    #         brightness_factor = brightness_factor.clamp(brightness[0], brightness[1])
-        # image_upper_bound = 1.0
-        # adjusted_images = brightness_factor[:,None, None, None] * images.clamp(0, image_upper_bound).to(images.dtype)
-    
     elif mode=='learnable':
-        adjusted_images, brightness_factor = augmentation_module(images)
+        if augmentation_version == 'v2':
+            adjusted_images, brightness_factor = augmentation_module(images)
+        else:
+            brightness_factor = augmentation_module(images)
+            if brightness is not None:
+                brightness_factor = brightness_factor.clamp(brightness[0], brightness[1])
+            image_upper_bound = 1.0
+            adjusted_images = brightness_factor[:,None, None, None] * images.clamp(0, image_upper_bound).to(images.dtype)
 
     return adjusted_images, brightness_factor
 
@@ -196,8 +195,17 @@ def train(epoch):
             images = images.cuda()
 
         optimizer.zero_grad()
-        inner_lr = lr_ratio * optimizer.param_groups[0]['lr']
-        loss, brightness_factor = forward_and_backward(net, images, labels, inner_lr)
+        if args.two_step:
+            inner_lr = lr_ratio * optimizer.param_groups[0]['lr']
+            loss, brightness_factor = forward_and_backward(net, images, labels, args.augmentation_version, inner_lr)
+        else:
+            if args.learning_augmentation:
+                images, brightness_factor = adjust_brightness(images, augmentation_module, args.augmentation_version, mode='learnable')
+            else:
+                images, brightness_factor = adjust_brightness(images, augmentation_module, args.augmentation_version, mode='random')
+            outputs = net(images)
+            loss = loss_function(outputs, labels)
+            loss.backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
         optimizer.step()
 
@@ -300,12 +308,17 @@ if __name__ == '__main__':
     parser.add_argument('-lr_ratio', type=float, default=0.1, help='ratio of inner lr to outer lr')
     parser.add_argument('-resume', action='store_true', default=False, help='resume training')
     parser.add_argument('-learning_augmentation', action='store_true', default=False, help='learning augmentation')
+    parser.add_argument('-augmentation_version', type=str, default='v2', help='which augmentation module to use')
+    parser.add_argument('-two_step', action='store_true', default=False, help='two step training training')
     args = parser.parse_args()
 
     net = get_network(args)
 
     if args.learning_augmentation:
-        augmentation_module = Augmentation_Module() # AugmentationModule()
+        if args.augmentation_version == 'v2':
+            augmentation_module = Augmentation_Module() # AugmentationModule()
+        else:
+            augmentation_module = AugmentationModule()
         if args.gpu: #use_gpu
             augmentation_module = augmentation_module.cuda()
 
