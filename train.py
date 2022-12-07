@@ -19,9 +19,6 @@ import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
 from torch.nn import init
-import copy
-from torch.nn import init
-import copy
 
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -121,20 +118,6 @@ class AugmentationModule(nn.Module):
         return brightness_factor
 
 
-def adjust_brightness(images: torch.Tensor, augmentation_module, mode='random', brightness=[0.2, 2]):
-    if mode=='random':
-        num_sample_per_batch = images.shape[0]
-        brightness_factor = torch.empty(num_sample_per_batch).uniform_(brightness[0], brightness[1])
-        if args.gpu:
-            brightness_factor = brightness_factor.cuda()
-
-    elif mode=='learnable':
-        brightness_factor = augmentation_module(images)
-        if brightness is not None:
-            brightness_factor = brightness_factor.clamp(brightness[0], brightness[1])
-
-
-    return adjusted_images, brightness_factor
 
 def adjust_brightness(images: torch.Tensor, augmentation_module, mode='random', brightness=[0.2, 2]):
     if mode=='random':
