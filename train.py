@@ -18,6 +18,8 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision
 import torchvision.transforms as transforms
+from torch.nn import init
+import copy
 
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -25,6 +27,140 @@ from torch.utils.tensorboard import SummaryWriter
 from conf import settings
 from utils import get_network, get_training_dataloader, get_test_dataloader, WarmUpLR, \
     most_recent_folder, most_recent_weights, last_epoch, best_acc_weights
+from augmentation_module import Augmentation_Module
+
+import time
+
+import numpy as np
+import torch
+import torch.optim as optim
+
+def permute_list(list):
+    indices = np.random.permutation(len(list))
+    return [list[i] for i in indices]
+
+
+def forward(model, data, label, inner_lr=0.04):
+    assert data.shape[0] == label.shape[0], 'data label must be of the same length'
+    data_len = data.shape[0]
+    data_0 = data[:data_len//2]
+    data_1 = data[data_len//2:]
+    label_0 = label[:data_len//2]
+    label_1 = label[data_len//2:]
+
+    # forward
+    model.train()
+    augmentation_module.train()
+
+    trainable_params = {}
+    for k, v in model.named_parameters():
+        if v.requires_grad:
+            trainable_params[k] = v
+
+    # TODO: no need to augmentation_module parameter here for backprop
+    # for k, v in augmentation_module.named_parameters():
+    #     if v.requires_grad:
+    #         trainable_params[k] = v
+
+    n = trainable_params.keys()
+    w = trainable_params.values()
+
+    adjusted_data_0, brightness_factor = adjust_brightness(data_0, augmentation_module, mode='learnable')
+    output_0 = model(adjusted_data_0)
+    loss = loss_function(output_0, label_0)
+    # loss is from using the augmented image result
+    gw = torch.autograd.grad(loss, w, create_graph=True)
+
+    new_trainable_params = {}
+    for i, a_name in enumerate(n):
+        new_trainable_params[a_name] = trainable_params[a_name] - gw[i] * inner_lr
+
+    # final L
+    # model.eval()    
+    model.load_state_dict(new_trainable_params, strict=False) # expect to see missing keys (for bn stats); and unexpected keys (for augmentation module)
+    output_1 = model(data_1)
+    final_loss = loss_function(output_1, label_1)
+    return final_loss, brightness_factor
+
+# Augmentation v1
+class AugmentationModule(nn.Module):
+    def __init__(self):
+        super(AugmentationModule, self).__init__()
+        self.learn_brightness_factor = nn.Sequential(
+            torch.nn.Conv2d(in_channels=3, out_channels=3, kernel_size=3, stride=2),
+            torch.nn.ReLU6(inplace=True),
+            torch.nn.Conv2d(in_channels=3, out_channels=1, kernel_size=3, stride=2),
+            torch.nn.ReLU6(inplace=True),
+            torch.nn.AdaptiveAvgPool2d(1),
+        )
+
+    def forward(self, x):
+        brightness_factor = self.learn_brightness_factor(x)
+        brightness_factor.squeeze_(-1).squeeze_(-1).squeeze_(-1)
+        return brightness_factor
+
+
+def adjust_brightness(images: torch.Tensor, augmentation_module, mode='random', brightness=[0.2, 2]):
+    if mode=='random':
+        num_sample_per_batch = images.shape[0]
+        brightness_factor = torch.empty(num_sample_per_batch).uniform_(brightness[0], brightness[1])
+        if args.gpu:
+            brightness_factor = brightness_factor.cuda()
+    # augmentation_module v1
+    # elif mode=='learnable':
+    #     brightness_factor = augmentation_module(images)
+    #     if brightness is not None:
+    #         brightness_factor = brightness_factor.clamp(brightness[0], brightness[1])
+    elif mode=='learnable':
+        adjusted_images, brightness_factor = augmentation_module(images)
+
+    return adjusted_images, brightness_factor
+
+
+def init_weights(net, state):
+    init_type, init_param = state.init, state.init_param
+
+    if init_type == 'imagenet_pretrained':
+        assert net.__class__.__name__ == 'AlexNet'
+        state_dict = torchvision.models.alexnet(pretrained=True).state_dict()
+        state_dict['classifier.6.weight'] = torch.zeros_like(net.classifier[6].weight)
+        state_dict['classifier.6.bias'] = torch.ones_like(net.classifier[6].bias)
+        net.load_state_dict(state_dict)
+        del state_dict
+        return net
+
+    def init_func(m):
+        classname = m.__class__.__name__
+        if classname.startswith('Conv') or classname == 'Linear':
+            if getattr(m, 'bias', None) is not None:
+                init.constant_(m.bias, 0.0)
+            if getattr(m, 'weight', None) is not None:
+                if init_type == 'normal':
+                    init.normal_(m.weight, 0.0, init_param)
+                elif init_type == 'xavier':
+                    init.xavier_normal_(m.weight, gain=init_param)
+                elif init_type == 'xavier_unif':
+                    init.xavier_uniform_(m.weight, gain=init_param)
+                elif init_type == 'kaiming':
+                    init.kaiming_normal_(m.weight, a=init_param, mode='fan_in')
+                elif init_type == 'kaiming_out':
+                    init.kaiming_normal_(m.weight, a=init_param, mode='fan_out')
+                elif init_type == 'orthogonal':
+                    init.orthogonal_(m.weight, gain=init_param)
+                elif init_type == 'default':
+                    if hasattr(m, 'reset_parameters'):
+                        m.reset_parameters()
+                else:
+                    raise NotImplementedError('initialization method [%s] is not implemented' % init_type)
+        elif 'Norm' in classname:
+            if getattr(m, 'weight', None) is not None:
+                m.weight.data.fill_(1)
+            if getattr(m, 'bias', None) is not None:
+                m.bias.data.zero_()
+
+    net.apply(init_func)
+    return net
+
 
 def train(epoch):
 
@@ -37,9 +173,10 @@ def train(epoch):
             images = images.cuda()
 
         optimizer.zero_grad()
-        outputs = net(images)
-        loss = loss_function(outputs, labels)
+        inner_lr = lr_ratio * optimizer.param_groups[0]['lr']
+        loss, brightness_factor = forward(net, images, labels, inner_lr)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
         optimizer.step()
 
         n_iter = (epoch - 1) * len(cifar100_training_loader) + batch_index + 1
@@ -50,10 +187,20 @@ def train(epoch):
                 writer.add_scalar('LastLayerGradients/grad_norm2_weights', para.grad.norm(), n_iter)
             if 'bias' in name:
                 writer.add_scalar('LastLayerGradients/grad_norm2_bias', para.grad.norm(), n_iter)
+        
+        mean_brightness_factor = float(torch.mean(brightness_factor))
+        writer.add_scalar('brightness_factor/mean', mean_brightness_factor, n_iter)
+        min_brightness_factor = float(torch.min(brightness_factor))
+        writer.add_scalar('brightness_factor/min', min_brightness_factor, n_iter)
+        max_brightness_factor = float(torch.max(brightness_factor))
+        writer.add_scalar('brightness_factor/max', max_brightness_factor, n_iter)
 
-        print('Training Epoch: {epoch} [{trained_samples}/{total_samples}]\tLoss: {:0.4f}\tLR: {:0.6f}'.format(
+        print('Training Epoch: {epoch} [{trained_samples}/{total_samples}]\tLoss: {:0.4f}\tLR: {:0.6f} mean_brightness_factor: {:0.4f} max_brightness_factor: {:0.4f} min_brightness_factor: {:0.4f}'.format(
             loss.item(),
             optimizer.param_groups[0]['lr'],
+            mean_brightness_factor,
+            max_brightness_factor,
+            min_brightness_factor,
             epoch=epoch,
             trained_samples=batch_index * args.b + len(images),
             total_samples=len(cifar100_training_loader.dataset)
@@ -101,7 +248,7 @@ def eval_training(epoch=0, tb=True):
         print('GPU INFO.....')
         print(torch.cuda.memory_summary(), end='')
     print('Evaluating Network.....')
-    print('Test set: Epoch: {}, Average loss: {:.4f}, Accuracy: {:.4f}, Time consumed:{:.2f}s'.format(
+    print('Test set: Epoch: {}, Average loss: {:.4f}, model: {:.4f}, Time consumed:{:.2f}s'.format(
         epoch,
         test_loss / len(cifar100_test_loader.dataset),
         correct.float() / len(cifar100_test_loader.dataset),
@@ -116,6 +263,7 @@ def eval_training(epoch=0, tb=True):
 
     return correct.float() / len(cifar100_test_loader.dataset)
 
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
@@ -124,10 +272,19 @@ if __name__ == '__main__':
     parser.add_argument('-b', type=int, default=128, help='batch size for dataloader')
     parser.add_argument('-warm', type=int, default=1, help='warm up training phase')
     parser.add_argument('-lr', type=float, default=0.1, help='initial learning rate')
+    parser.add_argument('-lr_ratio', type=float, default=0.1, help='ratio of inner lr to outer lr')
     parser.add_argument('-resume', action='store_true', default=False, help='resume training')
+    parser.add_argument('-learning_augmentation', action='store_true', default=False, help='learning augmentation')
     args = parser.parse_args()
 
     net = get_network(args)
+
+    if args.learning_augmentation:
+        augmentation_module = Augmentation_Module()
+        if args.gpu: #use_gpu
+            augmentation_module = augmentation_module.cuda()
+    
+    lr_ratio = args.lr_ratio
 
     #data preprocessing:
     cifar100_training_loader = get_training_dataloader(
@@ -147,7 +304,10 @@ if __name__ == '__main__':
     )
 
     loss_function = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    if args.learning_augmentation:
+        optimizer = optim.SGD(list(net.parameters())+list(augmentation_module.parameters()), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    else:
+        optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     train_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=settings.MILESTONES, gamma=0.2) #learning rate decay
     iter_per_epoch = len(cifar100_training_loader)
     warmup_scheduler = WarmUpLR(optimizer, iter_per_epoch * args.warm)
