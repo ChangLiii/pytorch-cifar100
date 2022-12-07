@@ -108,11 +108,7 @@ class PreActResFeatureNet(nn.Module):
         self._layers = layers[self.depth]
         self._block = blocks[self.depth]
         assert widen_factor in [1., 2., 3.]
-        #!self._nChannels = [
-        #    64,
-        #    64 * widen_factor, 128 * widen_factor,
-        #    256 * widen_factor, 512 * widen_factor
-        #]
+        
         self._nChannels = [
             8,
             8 * widen_factor, 16 * widen_factor,
@@ -238,36 +234,36 @@ class PreActResFeatureNet(nn.Module):
         x3 = self.layer3(x2)
         return [x0, x1, x2, x3]
     
-    def center(self, interval=False):
+    # def center(self, interval=False):
                 
-        n_pre=64
-        c_pre=torch.zeros([n_pre,n_pre,2])
-        base=2/n_pre
-        for i in range(n_pre):
-            for j in range(n_pre):
-                c_pre[i,j,0]=-1+base/2+i*base
-                c_pre[i,j,1]=-1+base/2+j*base
+    #     n_pre=64
+    #     c_pre=torch.zeros([n_pre,n_pre,2])
+    #     base=2/n_pre
+    #     for i in range(n_pre):
+    #         for j in range(n_pre):
+    #             c_pre[i,j,0]=-1+base/2+i*base
+    #             c_pre[i,j,1]=-1+base/2+j*base
         
-        c0=(c_pre[0::2, 0::2]+c_pre[1::2, 1::2])/2 #New version, get the center rather than left up corner
-        c1=c0
-        c2=(c1[0::2, 0::2]+c1[1::2, 1::2])/2
-        c3=(c2[0::2, 0::2]+c2[1::2, 1::2])/2
-        c_global=torch.zeros([1,1,2])
+    #     c0=(c_pre[0::2, 0::2]+c_pre[1::2, 1::2])/2 #New version, get the center rather than left up corner
+    #     c1=c0
+    #     c2=(c1[0::2, 0::2]+c1[1::2, 1::2])/2
+    #     c3=(c2[0::2, 0::2]+c2[1::2, 1::2])/2
+    #     c_global=torch.zeros([1,1,2])
         
-        center_dict={0: c0, 1: c1, 2: c2, 3: c3, -1: c_global}
+    #     center_dict={0: c0, 1: c1, 2: c2, 3: c3, -1: c_global}
         
-        centers=[center_dict[l] for l in self.output_layer]
-        if interval:
-            center_interval_dict={i: center_dict[i][1,0,0]-center_dict[i][0,0,0] for i in range(4)}
-            center_interval_dict[-1]=0.2
-            center_intervals=[center_interval_dict[l] for l in self.output_layer]
-            return centers, center_intervals
-        else:        
-            #return centers    
-            center_interval_dict={i: 0.0 for i in range(4)}
-            center_interval_dict[-1]=0.0
-            center_intervals=[center_interval_dict[l] for l in self.output_layer]
-            return centers, center_intervals
+    #     centers=[center_dict[l] for l in self.output_layer]
+    #     if interval:
+    #         center_interval_dict={i: center_dict[i][1,0,0]-center_dict[i][0,0,0] for i in range(4)}
+    #         center_interval_dict[-1]=0.2
+    #         center_intervals=[center_interval_dict[l] for l in self.output_layer]
+    #         return centers, center_intervals
+    #     else:        
+    #         #return centers    
+    #         center_interval_dict={i: 0.0 for i in range(4)}
+    #         center_interval_dict[-1]=0.0
+    #         center_intervals=[center_interval_dict[l] for l in self.output_layer]
+    #         return centers, center_intervals
     
     def scope(self, ranges=False):
         
@@ -301,21 +297,21 @@ class PreActResFeatureNet(nn.Module):
                 scope_ranges.append([min_range, max_range])
             return scopes, scope_ranges
     
-    def mask_for_no_padding(self, max_black_ratio=0.2):
-        centers, _=self.center()
-        scopes, _=self.scope()
-        paddings=[]
-        for i in range(len(centers)):
-            center=centers[i]
-            scope=scopes[i]
-            for j in range(center.shape[0]):
-                area_non_black=(center[j,j,0]+1+scope)**2
-                area_whole=(scope*2)**2
-                blank_ratio=1-area_non_black/area_whole
-                if blank_ratio<=max_black_ratio:
-                    paddings.append(j)
-                    break
-        return paddings
+    # def mask_for_no_padding(self, max_black_ratio=0.2):
+    #     centers, _=self.center()
+    #     scopes, _=self.scope()
+    #     paddings=[]
+    #     for i in range(len(centers)):
+    #         center=centers[i]
+    #         scope=scopes[i]
+    #         for j in range(center.shape[0]):
+    #             area_non_black=(center[j,j,0]+1+scope)**2
+    #             area_whole=(scope*2)**2
+    #             blank_ratio=1-area_non_black/area_whole
+    #             if blank_ratio<=max_black_ratio:
+    #                 paddings.append(j)
+    #                 break
+    #     return paddings
 
 if __name__=='__main__':
     net=PreActResFeatureNet(output_dims=[3,2])

@@ -39,7 +39,6 @@ def permute_list(list):
     indices = np.random.permutation(len(list))
     return [list[i] for i in indices]
 
-
 def forward(model, data, label, inner_lr=0.04):
     assert data.shape[0] == label.shape[0], 'data label must be of the same length'
     data_len = data.shape[0]
@@ -59,11 +58,11 @@ def forward(model, data, label, inner_lr=0.04):
             trainable_params[k] = v
             trainable_params_include_augmentation_module[k] = v
            
-
     # TODO: no need to augmentation_module parameter here for backprop
-    for k, v in augmentation_module.named_parameters():
-        if v.requires_grad:
-            trainable_params_include_augmentation_module[k] = v
+    # # commented out for Aumgnetation Module no update experiment 
+    # for k, v in augmentation_module.named_parameters():
+    #     if v.requires_grad:
+    #         trainable_params_include_augmentation_module[k] = v
 
     n = trainable_params.keys()
     w = trainable_params.values()
@@ -79,13 +78,12 @@ def forward(model, data, label, inner_lr=0.04):
         new_trainable_params[a_name] = trainable_params[a_name] - gw[i] * inner_lr
 
     # final L
-    # model.eval()    
+    # model.eval() # commented out for Aumgnetation Module no update experiment    
     model.load_state_dict(new_trainable_params, strict=False) # expect to see missing keys (for bn stats); and unexpected keys (for augmentation module)
     output_1 = model(data_1)
     final_loss = loss_function(output_1, label_1)
-    final_gradient = torch.autograd.grad(final_loss, trainable_params_include_augmentation_module.values(), create_graph=True)
 
-    return final_loss, brightness_factor, final_gradient
+    return final_loss, brightness_factor
 
 # Augmentation v1
 class AugmentationModule(nn.Module):
@@ -179,31 +177,19 @@ def train(epoch):
 
         optimizer.zero_grad()
         inner_lr = lr_ratio * optimizer.param_groups[0]['lr']
-        loss, brightness_factor, final_gradient = forward(net, images, labels, inner_lr)
-
-        # update both net and augmentation module based on loss
-        # trainable_params = {}
-        # # for k, v in net.named_parameters():
-        # #     if v.requires_grad:
-        # #         trainable_params[k] = v
-
-        # for k, v in augmentation_module.named_parameters():
-        #     if v.requires_grad:
-        #         trainable_params[k] = v
-
-        # n = trainable_params.keys()
-        # w = trainable_params.values()
-        # print(f"length of w is {len(w)}")
-
-        # TODO: do we need create_graph here
-        # final_gradient = torch.autograd.grad(loss, w, create_graph=True)
+        
+        # 2-step training loop
+        #loss, brightness_factor = forward(net, images, labels, inner_lr)
+        
+        # E2E training with Augmentation Module + model together
+        augmented_images, brightness_factor = augmentation_module(images)
+        outputs = net(augmented_images)
+        loss = loss_function(outputs, labels)
+        ##### E2E
         
         loss.backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
         optimizer.step() 
-        # TODO: verify if the augmentation module is changed here
-        # for name, param in augmentation_module.named_parameters():
-        #     print(f"name {name} with data {param.data}")
 
         n_iter = (epoch - 1) * len(cifar100_training_loader) + batch_index + 1
 
@@ -301,12 +287,18 @@ if __name__ == '__main__':
     parser.add_argument('-lr_ratio', type=float, default=0.1, help='ratio of inner lr to outer lr')
     parser.add_argument('-resume', action='store_true', default=False, help='resume training')
     parser.add_argument('-learning_augmentation', action='store_true', default=False, help='learning augmentation')
+
     args = parser.parse_args()
 
     net = get_network(args)
 
     if args.learning_augmentation:
+        # output a distribution
         augmentation_module = Augmentation_Module()
+        
+        # output a single factor
+        # augmentation_module = AugmentationModule()
+       
         if args.gpu: #use_gpu
             augmentation_module = augmentation_module.cuda()
     
