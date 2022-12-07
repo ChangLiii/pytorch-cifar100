@@ -57,7 +57,7 @@ class Color_Uniform_Dist_ConvFeature(ParametricDistribution):
         
         perturbation_range=torch.sigmoid(param) # ([N, 2, 1, 1])
         
-        max_range=[0.0, 20.0] # TODO: the range could be changed
+        max_range=[0.0, 2.0] # TODO: the range could be changed
         ranges=torch.tensor(max_range).type(perturbation_range.type()).reshape([1,-1,1,1])   
              
         perturbation_range=perturbation_range*ranges

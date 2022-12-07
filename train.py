@@ -56,9 +56,11 @@ def forward(model, data, label, inner_lr=0.04):
     for k, v in model.named_parameters():
         if v.requires_grad:
             trainable_params[k] = v
-    for k, v in augmentation_module.named_parameters():
-        if v.requires_grad:
-            trainable_params[k] = v
+
+    # TODO: no need to augmentation_module parameter here for backprop
+    # for k, v in augmentation_module.named_parameters():
+    #     if v.requires_grad:
+    #         trainable_params[k] = v
 
     n = trainable_params.keys()
     w = trainable_params.values()
@@ -66,6 +68,7 @@ def forward(model, data, label, inner_lr=0.04):
     adjusted_data_0, brightness_factor = adjust_brightness(data_0, augmentation_module, mode='learnable')
     output_0 = model(adjusted_data_0)
     loss = loss_function(output_0, label_0)
+    # loss is from using the augmented image result
     gw = torch.autograd.grad(loss, w, create_graph=True)
 
     new_trainable_params = {}
@@ -73,10 +76,9 @@ def forward(model, data, label, inner_lr=0.04):
         new_trainable_params[a_name] = trainable_params[a_name] - gw[i] * inner_lr
 
     # final L
-    model.eval()    
+    # model.eval()    
     model.load_state_dict(new_trainable_params, strict=False) # expect to see missing keys (for bn stats); and unexpected keys (for augmentation module)
     output_1 = model(data_1)
-    # del new_model
     final_loss = loss_function(output_1, label_1)
     return final_loss, brightness_factor
 
