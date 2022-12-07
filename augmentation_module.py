@@ -7,8 +7,6 @@ from torch import distributions
 import numpy as np
 from PreActResnet import PreActResFeatureNet
 
-import random
-
 class ParametricDistribution(nn.Module):
     """ Distributions for sampling transformations parameters """
 
@@ -100,7 +98,7 @@ class Augmentation_Module(nn.Module):
         
         self.get_param = AmortizedParamDist_Color(conv, color_layer=color_layer, color_dim=color_dim,)
         self.distC_color=Color_Uniform_Dist_ConvFeature
-
+         
     def parameters(self):
         return self.get_param.parameters()
 
