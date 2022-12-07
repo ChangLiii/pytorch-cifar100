@@ -322,6 +322,8 @@ if __name__ == '__main__':
         elif  args.augmentation_mode == 'value':
             # Augmentation Module outputs a single factor
             augmentation_module = AugmentationModule()
+        else:
+            raise Exception("Only support augmentation mode of distribution or value")
 
         if args.gpu: #use_gpu
             augmentation_module = augmentation_module.cuda()
