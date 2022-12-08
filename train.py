@@ -37,7 +37,7 @@ def permute_list(list):
     indices = np.random.permutation(len(list))
     return [list[i] for i in indices]
 
-def forward_and_backward(model, data, label, augmentation_version='distribution', inner_lr=0.04, outer_lr=0.04):
+def forward_and_backward(model, data, label, augmentation_version='distribution', inner_lr=0.04):
     assert data.shape[0] == label.shape[0], 'data label must be of the same length'
     data_len = data.shape[0]
     data_0 = data[:data_len//2]
@@ -208,6 +208,7 @@ def train(epoch):
             loss = loss_function(outputs, labels)
             loss.backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(augmentation_module.parameters(), max_norm=1.0)
         optimizer.step() 
 
         n_iter = (epoch - 1) * len(cifar100_training_loader) + batch_index + 1
@@ -365,7 +366,7 @@ if __name__ == '__main__':
         checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder)
 
     else:
-        checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, f'LR_{args.lr}_AL_{args.augmentation_lr}_AugMode_{args.augmentation_mode}_TwoStep_{args.two_step}')
+        checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, f'LR_{args.lr}_AL_{args.augmentation_lr}_InnerLR_{args.lr_ratio}*{args.lr}_AugMode_{args.augmentation_mode}_TwoStep_{args.two_step}')
 
     #use tensorboard
     if not os.path.exists(settings.LOG_DIR):
@@ -374,7 +375,7 @@ if __name__ == '__main__':
     #since tensorboard can't overwrite old values
     #so the only way is to create a new tensorboard log
     writer = SummaryWriter(log_dir=os.path.join(
-            settings.LOG_DIR, args.net, f'LR_{args.lr}_AL_{args.augmentation_lr}_AugMode_{args.augmentation_mode}_TwoStep_{args.two_step}'))
+            settings.LOG_DIR, args.net, f'LR_{args.lr}_AL_{args.augmentation_lr}_InnerLR_{args.lr_ratio}*{args.lr}_AugMode_{args.augmentation_mode}_TwoStep_{args.two_step}'))
     input_tensor = torch.Tensor(1, 3, 32, 32)
     if args.gpu:
         input_tensor = input_tensor.cuda()
