@@ -26,7 +26,6 @@ from torch.utils.tensorboard import SummaryWriter
 from conf import settings
 from utils import get_network, get_training_dataloader, get_test_dataloader, WarmUpLR, \
     most_recent_folder, most_recent_weights, last_epoch, best_acc_weights
-
 import time
 
 import numpy as np
@@ -38,8 +37,7 @@ def permute_list(list):
     indices = np.random.permutation(len(list))
     return [list[i] for i in indices]
 
-
-def forward_and_backward(model, data, label, augmentation_version='v2', inner_lr=0.04, outer_lr=0.04):
+def forward_and_backward(model, data, label, augmentation_version='distribution', inner_lr=0.04):
     assert data.shape[0] == label.shape[0], 'data label must be of the same length'
     data_len = data.shape[0]
     data_0 = data[:data_len//2]
@@ -84,6 +82,7 @@ def forward_and_backward(model, data, label, augmentation_version='v2', inner_lr
         if v.requires_grad:
             new_model_trainable_params[k] = v
     final_loss = loss_function(output_1, label_1)
+
     dw = torch.autograd.grad(final_loss, new_model_trainable_params.values(), retain_graph=True)
     trainable_module_params = {}
     for k, v in augmentation_module.named_parameters():
@@ -101,6 +100,7 @@ def forward_and_backward(model, data, label, augmentation_version='v2', inner_lr
     # final_loss.backward()
     return final_loss, brightness_factor
 
+# Augmentation module that returns a single factor
 class AugmentationModule(nn.Module):
     def __init__(self):
         super(AugmentationModule, self).__init__()
@@ -119,7 +119,7 @@ class AugmentationModule(nn.Module):
 
 
 
-def adjust_brightness(images: torch.Tensor, augmentation_module, augmentation_version, mode='random', brightness=[0.2, 2]):
+def adjust_brightness(images: torch.Tensor, augmentation_module, augmentation_version='distribution', mode='random', brightness=[0.2, 2]):
     if mode=='random':
         num_sample_per_batch = images.shape[0]
         brightness_factor = torch.empty(num_sample_per_batch).uniform_(brightness[0], brightness[1])
@@ -128,9 +128,9 @@ def adjust_brightness(images: torch.Tensor, augmentation_module, augmentation_ve
         image_upper_bound = 1.0
         adjusted_images = brightness_factor[:,None, None, None] * images.clamp(0, image_upper_bound).to(images.dtype)
     elif mode=='learnable':
-        if augmentation_version == 'v2':
+        if augmentation_version == 'distribution':
             adjusted_images, brightness_factor = augmentation_module(images)
-        else:
+        elif augmentation_version == 'value':
             brightness_factor = augmentation_module(images)
             if brightness is not None:
                 brightness_factor = brightness_factor.clamp(brightness[0], brightness[1])
@@ -197,17 +197,19 @@ def train(epoch):
         optimizer.zero_grad()
         if args.two_step:
             inner_lr = lr_ratio * optimizer.param_groups[0]['lr']
-            loss, brightness_factor = forward_and_backward(net, images, labels, args.augmentation_version, inner_lr)
+            loss, brightness_factor = forward_and_backward(net, images, labels, args.augmentation_mode, inner_lr)
         else:
             if args.learning_augmentation:
-                images, brightness_factor = adjust_brightness(images, augmentation_module, args.augmentation_version, mode='learnable')
+                # learning augmentation module e2e
+                images, brightness_factor = adjust_brightness(images, augmentation_module, args.augmentation_mode, mode='learnable')
             else:
                 images, brightness_factor = adjust_brightness(images, None, None, mode='random')
             outputs = net(images)
             loss = loss_function(outputs, labels)
             loss.backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
-        optimizer.step()
+        torch.nn.utils.clip_grad_norm_(augmentation_module.parameters(), max_norm=1.0)
+        optimizer.step() 
 
         n_iter = (epoch - 1) * len(cifar100_training_loader) + batch_index + 1
 
@@ -292,7 +294,7 @@ def eval_training(epoch=0, tb=True):
         print('GPU INFO.....')
         print(torch.cuda.memory_summary(), end='')
     print('Evaluating Network.....')
-    print('Test set: Epoch: {}, Average loss: {:.4f}, model: {:.4f}, Time consumed:{:.2f}s'.format(
+    print('Test set: Epoch: {}, Average loss: {:.4f}, Accuracy: {:.4f}, Time consumed:{:.2f}s'.format(
         epoch,
         test_loss / len(cifar100_test_loader.dataset),
         correct.float() / len(cifar100_test_loader.dataset),
@@ -309,6 +311,7 @@ def eval_training(epoch=0, tb=True):
 
 
 if __name__ == '__main__':
+    # Example running command: python train.py -net preactresnet18 -gpu -lr 0.1 -augmentation_lr 0.05 -learning_augmentation -augmentation_mode distribution 2>&1 | tee log_lr_01_AL_005_e2e.txt
 
     parser = argparse.ArgumentParser()
     parser.add_argument('-net', type=str, required=True, help='net type')
@@ -320,20 +323,25 @@ if __name__ == '__main__':
     parser.add_argument('-lr_ratio', type=float, default=0.1, help='ratio of inner lr to outer lr')
     parser.add_argument('-resume', action='store_true', default=False, help='resume training')
     parser.add_argument('-learning_augmentation', action='store_true', default=False, help='learning augmentation')
-    parser.add_argument('-augmentation_version', type=str, default='v2', help='which augmentation module to use')
+    parser.add_argument('-augmentation_mode', type=str, default='distribution', choices=['value', 'distribution'], help='which augmentation module to use')
     parser.add_argument('-two_step', action='store_true', default=False, help='two step training training')
     args = parser.parse_args()
 
     net = get_network(args)
 
     if args.learning_augmentation:
-        if args.augmentation_version == 'v2':
-            augmentation_module = Augmentation_Module() # AugmentationModule()
-        else:
+        # Augmentation Module outputs a distribution
+        if args.augmentation_mode == 'distribution':
+            augmentation_module = Augmentation_Module()
+        elif  args.augmentation_mode == 'value':
+            # Augmentation Module outputs a single factor
             augmentation_module = AugmentationModule()
+        else:
+            raise Exception("Only support augmentation mode of distribution or value")
+
         if args.gpu: #use_gpu
             augmentation_module = augmentation_module.cuda()
-
+    
     lr_ratio = args.lr_ratio
 
     #data preprocessing:
@@ -354,10 +362,11 @@ if __name__ == '__main__':
     )
 
     loss_function = nn.CrossEntropyLoss()
- 
+    
     optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     if args.learning_augmentation:
         optimizer.add_param_group({'params': augmentation_module.parameters(), 'lr': args.augmentation_lr, 'momentum': 0.9, 'weight_decay': 5e-4})
+    
     train_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=settings.MILESTONES, gamma=0.2) #learning rate decay
     iter_per_epoch = len(cifar100_training_loader)
     warmup_scheduler = WarmUpLR(optimizer, iter_per_epoch * args.warm)
@@ -370,7 +379,7 @@ if __name__ == '__main__':
         checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, recent_folder)
 
     else:
-        checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, settings.TIME_NOW)
+        checkpoint_path = os.path.join(settings.CHECKPOINT_PATH, args.net, f'LR_{args.lr}_AL_{args.augmentation_lr}_InnerLR_{args.lr_ratio}*{args.lr}_AugMode_{args.augmentation_mode}_TwoStep_{args.two_step}')
 
     #use tensorboard
     if not os.path.exists(settings.LOG_DIR):
@@ -379,7 +388,7 @@ if __name__ == '__main__':
     #since tensorboard can't overwrite old values
     #so the only way is to create a new tensorboard log
     writer = SummaryWriter(log_dir=os.path.join(
-            settings.LOG_DIR, args.net, settings.TIME_NOW))
+            settings.LOG_DIR, args.net, f'LR_{args.lr}_AL_{args.augmentation_lr}_InnerLR_{args.lr_ratio}*{args.lr}_AugMode_{args.augmentation_mode}_TwoStep_{args.two_step}'))
     input_tensor = torch.Tensor(1, 3, 32, 32)
     if args.gpu:
         input_tensor = input_tensor.cuda()

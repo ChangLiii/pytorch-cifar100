@@ -1,6 +1,6 @@
 # Pytorch-cifar100
 
-practice on cifar100 using pytorch
+Implementation of CS330 Project Learning to Augment. This codebase is forked from https://github.com/weiaicunzai/pytorch-cifar100, and our implementation is built on top of the original codebase.
 
 ## Requirements
 
@@ -35,12 +35,25 @@ $ tensorboard --logdir='runs' --port=6006 --host='localhost'
 You need to specify the net you want to train using arg -net
 
 ```bash
-# use gpu to train vgg16
-$ python train.py -net vgg16 -gpu
+# use gpu to train preactresnet18 classification model without learning augmentation module
+$ python train.py -net preactresnet18 -gpu -lr 0.1 -augmentation_lr 0.01
+
+# use gpu to train preactresnet18 classification model and learning the aumgentation model that outputs a single value E2E
+$ python train.py -net preactresnet18 -gpu -learning_augmentation -augmentation_mode value -lr 0.1 -augmentation_lr 0.01
+
+# use gpu to train preactresnet18 classification model and learning the aumgentation model that outputs a distribution E2E
+$ python train.py -net preactresnet18 -gpu -learning_augmentation -augmentation_mode distribution -lr 0.1 -augmentation_lr 0.01
+
+# use gpu to train preactresnet18 classification model and learning the aumgentation model that outputs a single value 2-step training strategy
+$ python train.py -net preactresnet18 -gpu -learning_augmentation -augmentation_mode value -two_step -lr 0.1 -augmentation_lr 0.01
+
+# use gpu to train preactresnet18 classification model and learning the aumgentation model that outputs a distribution using 2-step training strategy
+$ python train.py -net preactresnet18 -gpu -learning_augmentation -augmentation_mode distribution -two_step -lr 0.1 -augmentation_lr 0.01
 ```
 
 sometimes, you might want to use warmup training by set ```-warm``` to 1 or 2, to prevent network
 diverge during early training phase.
+Also you can adjust augmentation model learning rate seperately using ```-augmentation_lr```.
 
 The supported net args are:
 ```
