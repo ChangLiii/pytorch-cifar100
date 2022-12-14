@@ -44,7 +44,7 @@ $ python train.py -net preactresnet18 -gpu -learning_augmentation -augmentation_
 # use gpu to train preactresnet18 classification model and learning the aumgentation model that outputs a distribution E2E
 $ python train.py -net preactresnet18 -gpu -learning_augmentation -augmentation_mode distribution -lr 0.1 -augmentation_lr 0.01
 
-# use gpu to train preactresnet18 classification model and learning the aumgentation model that outputs a single value 2-step training strategy
+# use gpu to train preactresnet18 classification model and learning the aumgentation model that outputs a single value using 2-step training strategy
 $ python train.py -net preactresnet18 -gpu -learning_augmentation -augmentation_mode value -two_step -lr 0.1 -augmentation_lr 0.01
 
 # use gpu to train preactresnet18 classification model and learning the aumgentation model that outputs a distribution using 2-step training strategy
