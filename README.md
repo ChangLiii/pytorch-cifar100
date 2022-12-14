@@ -1,4 +1,4 @@
-# Pytorch-cifar100
+# CS330 Project Learning to Augment
 
 Implementation of CS330 Project Learning to Augment. This codebase is forked from https://github.com/weiaicunzai/pytorch-cifar100, and our implementation is built on top of the original codebase.
 
