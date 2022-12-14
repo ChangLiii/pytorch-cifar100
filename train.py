@@ -202,7 +202,7 @@ def train(epoch):
             if args.learning_augmentation:
                 images, brightness_factor = adjust_brightness(images, augmentation_module, args.augmentation_version, mode='learnable')
             else:
-                images, brightness_factor = adjust_brightness(images, augmentation_module, args.augmentation_version, mode='random')
+                images, brightness_factor = adjust_brightness(images, None, None, mode='random')
             outputs = net(images)
             loss = loss_function(outputs, labels)
             loss.backward()
@@ -225,18 +225,30 @@ def train(epoch):
         max_brightness_factor = float(torch.max(brightness_factor))
         writer.add_scalar('brightness_factor/max', max_brightness_factor, n_iter)
 
-        print('Training Epoch: {epoch} [{trained_samples}/{total_samples}]\tLoss: {:0.4f}\tLR: {:0.6f}\tAugLR: {:0.6f} mean_brightness_factor: {:0.4f}'.format(
-            loss.item(),
-            optimizer.param_groups[0]['lr'],
-            optimizer.param_groups[1]['lr'],
-            mean_brightness_factor,
-            mean_brightness_factor,
-            max_brightness_factor,
-            min_brightness_factor,
-            epoch=epoch,
-            trained_samples=batch_index * args.b + len(images),
-            total_samples=len(cifar100_training_loader.dataset)
-        ))
+        if args.learning_augmentation:
+            print('Training Epoch: {epoch} [{trained_samples}/{total_samples}]\tLoss: {:0.4f}\tLR: {:0.6f}\tAugLR: {:0.6f} mean_brightness_factor: {:0.4f} max_brightness_factor: {:0.4f} min_brightness_factor: {:0.4f}'.format(
+                loss.item(),
+                optimizer.param_groups[0]['lr'],
+                optimizer.param_groups[1]['lr'],
+                mean_brightness_factor,
+                max_brightness_factor,
+                min_brightness_factor,
+                epoch=epoch,
+                trained_samples=batch_index * args.b + len(images),
+                total_samples=len(cifar100_training_loader.dataset)
+            ))
+        else:
+            print('Training Epoch: {epoch} [{trained_samples}/{total_samples}]\tLoss: {:0.4f}\tLR: {:0.6f}\t mean_brightness_factor: {:0.4f} max_brightness_factor: {:0.4f} min_brightness_factor: {:0.4f}'.format(
+                loss.item(),
+                optimizer.param_groups[0]['lr'],
+                mean_brightness_factor,
+                max_brightness_factor,
+                min_brightness_factor,
+                epoch=epoch,
+                trained_samples=batch_index * args.b + len(images),
+                total_samples=len(cifar100_training_loader.dataset)
+            ))
+
 
         #update training loss for each iteration
         writer.add_scalar('Train/loss', loss.item(), n_iter)
