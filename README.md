@@ -45,15 +45,16 @@ $ python train.py -net preactresnet18 -gpu -learning_augmentation -augmentation_
 $ python train.py -net preactresnet18 -gpu -learning_augmentation -augmentation_mode distribution -lr 0.1 -augmentation_lr 0.01
 
 # use gpu to train preactresnet18 classification model and learning the aumgentation model that outputs a single value using 2-step training strategy
-$ python train.py -net preactresnet18 -gpu -learning_augmentation -augmentation_mode value -two_step -lr 0.1 -augmentation_lr 0.01
+$ python train.py -net preactresnet18 -gpu -learning_augmentation -augmentation_mode value -two_step -lr 0.1 -augmentation_lr 0.01 -lr_ratio 1.0
 
 # use gpu to train preactresnet18 classification model and learning the aumgentation model that outputs a distribution using 2-step training strategy
-$ python train.py -net preactresnet18 -gpu -learning_augmentation -augmentation_mode distribution -two_step -lr 0.1 -augmentation_lr 0.01
+$ python train.py -net preactresnet18 -gpu -learning_augmentation -augmentation_mode distribution -two_step -lr 0.1 -augmentation_lr 0.01 -lr_ratio 1.0
 ```
 
 sometimes, you might want to use warmup training by set ```-warm``` to 1 or 2, to prevent network
 diverge during early training phase.
 Also you can adjust augmentation model learning rate seperately using ```-augmentation_lr```.
+And in 2-step training paradigm, you can use ```-lr_ratio``` to adjust the inner learning rate used in step 1 repsect to the outter learning rate used in step 2.
 
 The supported net args are:
 ```
